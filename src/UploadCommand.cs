@@ -8,12 +8,6 @@ public static class UploadCommand
     private static readonly AppId_t _sts2AppId = new(2868840);
     private static bool _steamIsInitialized;
     
-    private static readonly JsonSerializerOptions _serializerOptions = new()
-    {
-        WriteIndented = true,
-        IncludeFields = true,
-    };
-    
     public static async Task<int> UploadWorkspace(DirectoryInfo workspaceDirectory, ulong? itemIdArg)
     {
         // First, do some validation of what is in the directory.
@@ -43,7 +37,7 @@ public static class UploadCommand
         try
         {
             await using FileStream configJsonStream = configJsonInfo.Open(FileMode.Open);
-            modConfig = await JsonSerializer.DeserializeAsync<ModConfig>(configJsonStream, _serializerOptions);
+            modConfig = await JsonSerializer.DeserializeAsync(configJsonStream, SourceGenerationContext.Default.ModConfig);
         }
         catch (JsonException)
         {
@@ -118,11 +112,25 @@ public static class UploadCommand
         {
             Log.Info($"Using workshop item ID {itemIdArg.Value} passed in via command line");
             workshopItem = new PublishedFileId_t(itemIdArg.Value);
+
+            bool exists = await DoesWorkshopItemExist(workshopItem);
+            if (!exists)
+            {
+                Log.Error($"Tried to upload to workshop item with ID {itemIdArg.Value} passed via command line, but it doesn't exist!");
+                return 1;
+            }
         }
         else if (modIdTxt != null)
         {
             Log.Info($"Using workshop item ID {modIdTxt.Value} from mod_id.txt");
             workshopItem = new PublishedFileId_t(modIdTxt.Value);
+
+            bool exists = await DoesWorkshopItemExist(workshopItem);
+            if (!exists)
+            {
+                Log.Error($"Tried to upload to workshop item with ID {modIdTxt.Value} but it doesn't exist! If you wish to upload a new item, delete 'mod_id.txt' from your mod directory.");
+                return 1;
+            }
         }
         else
         {
@@ -134,7 +142,7 @@ public static class UploadCommand
 
             if (createItemResult.m_eResult != EResult.k_EResultOK)
             {
-                Log.Info($"Failed to create workshop item! Result: {createItemResult.m_eResult}");
+                Log.Error($"Failed to create workshop item! Result: {createItemResult.m_eResult}");
                 return 1;
             }
 
@@ -162,7 +170,7 @@ public static class UploadCommand
 
         if (updateItemResult.m_eResult != EResult.k_EResultOK)
         {
-            Log.Info($"Error occurred while uploading to the workshop! Result: {updateItemResult.m_eResult}");
+            Log.Error($"Error occurred while uploading to the workshop! Result: {updateItemResult.m_eResult}");
             return 1;
         }
         
@@ -224,41 +232,81 @@ public static class UploadCommand
         Log.Info("Querying existing app dependencies... ");
         
         UGCQueryHandle_t handle = SteamUGC.CreateQueryUGCDetailsRequest([workshopItem], 1);
-        SteamAPICall_t call = SteamUGC.SendQueryUGCRequest(handle);
-        using SteamCallResult<SteamUGCQueryCompleted_t> callResult = new(call);
-        SteamUGCQueryCompleted_t result = await callResult.Task;
 
-        if (result.m_eResult != EResult.k_EResultOK)
+        try
         {
-            Log.Info($"Couldn't get dependencies for item {workshopItem.m_PublishedFileId}! Error: {result.m_eResult}");
-            return [];
-        }
+            SteamAPICall_t call = SteamUGC.SendQueryUGCRequest(handle);
+            using SteamCallResult<SteamUGCQueryCompleted_t> callResult = new(call);
+            SteamUGCQueryCompleted_t result = await callResult.Task;
 
-        bool success;
-        uint index = 0;
-        PublishedFileId_t[] cache = new PublishedFileId_t[4];
-        List<ulong> dependencies = [];
-
-        do
-        {
-            success = SteamUGC.GetQueryUGCChildren(result.m_handle, index, cache, (uint)cache.Length);
-            foreach (PublishedFileId_t dependency in cache)
+            if (result.m_eResult != EResult.k_EResultOK)
             {
-                if (dependency.m_PublishedFileId != 0)
+                Log.Warn(
+                    $"Couldn't get dependencies for item {workshopItem.m_PublishedFileId}! Error: {result.m_eResult}");
+                return [];
+            }
+            
+            SteamUGC.GetQueryUGCResult(handle, 0, out _);
+
+            bool success;
+            uint index = 0;
+            PublishedFileId_t[] cache = new PublishedFileId_t[4];
+            List<ulong> dependencies = [];
+
+            do
+            {
+                success = SteamUGC.GetQueryUGCChildren(result.m_handle, index, cache, (uint)cache.Length);
+                foreach (PublishedFileId_t dependency in cache)
                 {
-                    dependencies.Add(dependency.m_PublishedFileId);
+                    if (dependency.m_PublishedFileId != 0)
+                    {
+                        dependencies.Add(dependency.m_PublishedFileId);
+                    }
                 }
+
+                index += (uint)cache.Length;
+            } while (success);
+
+            if (dependencies.Count > 0)
+            {
+                Log.Info($"Found {dependencies.Count} dependencies.");
             }
 
-            index += (uint)cache.Length;
-        } while (success);
-
-        if (dependencies.Count > 0)
-        {
-            Log.Info($"Found {dependencies.Count} dependencies.");
+            return dependencies;
         }
+        finally
+        {
+            SteamUGC.ReleaseQueryUGCRequest(handle);
+        }
+    }
 
-        return dependencies;
+    private static async Task<bool> DoesWorkshopItemExist(PublishedFileId_t workshopItem)
+    {
+        UGCQueryHandle_t handle = SteamUGC.CreateQueryUGCDetailsRequest([workshopItem], 1);
+
+        try
+        {
+            SteamAPICall_t call = SteamUGC.SendQueryUGCRequest(handle);
+            using SteamCallResult<SteamUGCQueryCompleted_t> callResult = new(call);
+            SteamUGCQueryCompleted_t result = await callResult.Task;
+
+            SteamUGC.GetQueryUGCResult(handle, 0, out SteamUGCDetails_t details);
+
+            if (details.m_eResult == EResult.k_EResultFileNotFound)
+            {
+                return false;
+            }
+            else if (details.m_eResult != EResult.k_EResultOK)
+            {
+                Log.Warn($"Couldn't confirm existence of workshop item {workshopItem.m_PublishedFileId}. Error: {result.m_eResult}");
+            }
+
+            return true;
+        }
+        finally
+        {
+            SteamUGC.ReleaseQueryUGCRequest(handle);
+        }
     }
 
     private static async Task LogUploadProgress(UGCUpdateHandle_t updateHandle, CancellationTokenSource cancelToken)

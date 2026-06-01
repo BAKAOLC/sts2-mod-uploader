@@ -15,4 +15,16 @@ public static class Log
         Console.WriteLine(log);
         streamWriter.WriteLine(log);
     }
+    
+    public static void Warn(string log)
+    {
+        Console.WriteLine($"\x1b[33m{log}\x1b[0m");
+        streamWriter.WriteLine(log);
+    }
+    
+    public static void Error(string log)
+    {
+        Console.WriteLine($"\x1b[31m{log}\x1b[0m");
+        streamWriter.WriteLine(log);
+    }
 }
