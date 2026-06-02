@@ -29,52 +29,57 @@ public static class Program
                 return 0;
             }
 
-            Option<DirectoryInfo> newWorkspaceOption =
-                new Option<DirectoryInfo>(["--workspace", "-w"], "The location in which the new workspace will be created.")
-                    { IsRequired = true };
-
-            Option<DirectoryInfo> uploadWorkspaceOption =
-                new Option<DirectoryInfo>(["--workspace", "-w"], "The directory of the workspace to upload to the workshop.")
-                    { IsRequired = true };
-
-            Option<DirectoryInfo> deleteWorkspaceOption =
-                new Option<DirectoryInfo>(["--workspace", "-w"], "The directory of the workspace which will be deleted from the workshop.");
-
-            Option<ulong?> uploadItemIdOption = new Option<ulong?>(["--id", "-i"],
-                "The ID of the workshop item to update. If this is not specified, we'll look for mod_id.txt in the workspace. If it is also not present, a new item is created.");
-            Option<ulong?> deleteItemIdOption = new Option<ulong?>(["--id", "-i"],
-                "The ID of the workshop item to delete. If this is not specified, we'll look for mod_id.txt in the workspace.");
-
-            Command newCommand = new("new", "Create a new workspace for a new mod.")
+            Option<DirectoryInfo> newWorkspaceOption = new("--workspace", "-w")
             {
-                newWorkspaceOption
+                Description = "The location in which the new workspace will be created.",
+                Required = true
             };
 
-            newCommand.SetHandler(NewCommand.CreateNewWorkspace, newWorkspaceOption);
-
-            Command uploadCommand = new("upload", "Upload a new mod or update a mod to the Steam Workshop.")
+            Option<DirectoryInfo> uploadWorkspaceOption = new("--workspace", "-w")
             {
-                uploadWorkspaceOption,
-                uploadItemIdOption
+                Description = "The directory of the workspace to upload to the workshop.",
+                Required = true
             };
 
-            uploadCommand.SetHandler(UploadCommand.UploadWorkspace, uploadWorkspaceOption, uploadItemIdOption);
+            Option<DirectoryInfo> deleteWorkspaceOption = new("--workspace", "-w")
+            {
+                Description = "The directory of the workspace which will be deleted from the workshop.",
+            };
+
+            Option<ulong?> uploadItemIdOption = new Option<ulong?>("--id", "-i")
+            {
+                Description =
+                    "The ID of the workshop item to update. If this is not specified, we'll look for mod_id.txt in the workspace. If it is also not present, a new item is created."
+            };
+
+            Option<ulong?> deleteItemIdOption = new Option<ulong?>("--id", "-i")
+            {
+                Description =
+                    "The ID of the workshop item to delete. If this is not specified, we'll look for mod_id.txt in the workspace."
+            };
+
+            Command newCommand = new("new", "Create a new workspace for a new mod.");
+            newCommand.Options.Add(newWorkspaceOption);
+            newCommand.SetAction(p => NewCommand.CreateNewWorkspace(p.GetValue(newWorkspaceOption)));
+
+            Command uploadCommand = new("upload", "Upload a new mod or update a mod to the Steam Workshop.");
+            uploadCommand.Options.Add(uploadWorkspaceOption);
+            uploadCommand.Options.Add(uploadItemIdOption);
+            uploadCommand.SetAction(p => UploadCommand.UploadWorkspace(p.GetRequiredValue(uploadWorkspaceOption), p.GetValue(uploadItemIdOption)));
 
             Command removeCommand = new("remove",
-                "Remove the mod from the workshop. Your local workspace will be unaffected.")
-            {
-                deleteWorkspaceOption,
-                deleteItemIdOption
-            };
-
-            removeCommand.SetHandler(RemoveCommand.Remove, deleteWorkspaceOption, deleteItemIdOption);
+                "Remove the mod from the workshop. Your local workspace will be unaffected.");
+            removeCommand.Options.Add(deleteWorkspaceOption);
+            removeCommand.Options.Add(deleteItemIdOption);
+            removeCommand.SetAction(p => RemoveCommand.Remove(p.GetRequiredValue(deleteWorkspaceOption), p.GetValue(deleteItemIdOption)));
 
             RootCommand rootCommand = new("Utility for creating and updating STS2 Steam Workshop mods.");
-            rootCommand.AddCommand(newCommand);
-            rootCommand.AddCommand(uploadCommand);
-            rootCommand.AddCommand(removeCommand);
+            rootCommand.Subcommands.Add(newCommand);
+            rootCommand.Subcommands.Add(uploadCommand);
+            rootCommand.Subcommands.Add(removeCommand);
 
-            return rootCommand.InvokeAsync(args).Result;
+            ParseResult parseResult = rootCommand.Parse(args);
+            return parseResult.Invoke();
         }
         catch (Exception e)
         {

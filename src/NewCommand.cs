@@ -4,13 +4,13 @@ public static class NewCommand
 {
     public static Task CreateNewWorkspace()
     {
-        return CreateNewWorkspace(new DirectoryInfo("NewModWorkspace"));
+        return CreateNewWorkspace(null);
     }
     
-    public static Task CreateNewWorkspace(DirectoryInfo workspaceDirectory)
+    public static Task CreateNewWorkspace(DirectoryInfo? workspaceDirectory)
     {
         DirectoryInfo templateInfo = new("template");
-        CopyDirectoryRecursive(templateInfo, workspaceDirectory);
+        CopyDirectoryRecursive(templateInfo, workspaceDirectory ?? new DirectoryInfo("NewModWorkspace"));
         Log.Info($"Copied template files to {workspaceDirectory}");
         return Task.CompletedTask;
     }
@@ -20,7 +20,7 @@ public static class NewCommand
         // Check if the source directory exists
         if (!sourceDir.Exists)
         {
-            throw new DirectoryNotFoundException($"Template not found! {sourceDir.FullName}");
+            throw new DirectoryNotFoundException($"Template not found at {sourceDir.FullName}!\nYou might need to redownload the application.");
         }
 
         // Cache directories before we start copying

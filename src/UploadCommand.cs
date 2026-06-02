@@ -9,25 +9,31 @@ public static class UploadCommand
     
     public static async Task<int> UploadWorkspace(DirectoryInfo workspaceDirectory, ulong? itemIdArg)
     {
+        if (!workspaceDirectory.Exists)
+        {
+            Log.Error($"No directory at {workspaceDirectory}!");
+            return 1;
+        }
+        
         // First, do some validation of what is in the directory.
         FileInfo imageFileInfo = new FileInfo(Path.Combine(workspaceDirectory.FullName, "image.jpg"));
         if (!imageFileInfo.Exists)
         {
-            Log.Info("There is no file named image.jpg in the workspace!");
+            Log.Error("There is no file named image.jpg in the workspace!");
             return 1;
         }
 
         DirectoryInfo contentDirectoryInfo = new DirectoryInfo(Path.Combine(workspaceDirectory.FullName, "content"));
         if (!contentDirectoryInfo.Exists)
         {
-            Log.Info("There is no 'content' directory inside the workspace!");
+            Log.Error("There is no 'content' directory inside the workspace!");
             return 1;
         }
 
         FileInfo configJsonInfo = new FileInfo(Path.Combine(workspaceDirectory.FullName, "workshop.json"));
         if (!configJsonInfo.Exists)
         {
-            Log.Info("There is no file named workshop.json in the workspace!");
+            Log.Error("There is no file named workshop.json in the workspace!");
             return 1;
         }
 
@@ -40,19 +46,19 @@ public static class UploadCommand
         }
         catch (JsonException)
         {
-            Log.Info("Exception thrown while parsing the workshop config! Double-check that the format is correct.");
+            Log.Error("Exception thrown while parsing the workshop config! Double-check that the format is correct.");
             throw;
         }
 
         if (modConfig == null)
         {
-            Log.Info("Tried to parse workshop.json, but it returned null!");
+            Log.Error("Tried to parse workshop.json, but it returned null!");
             return 1;
         }
 
-        if (VisibiltyFromString(modConfig.visibility) == null)
+        if (modConfig.visibility != null && VisibiltyFromString(modConfig.visibility) == null)
         {
-            Log.Info($"Invalid visibility '{modConfig.visibility}' in workshop.json! Should be: private, public, unlisted, or friends_only");
+            Log.Error($"Invalid visibility '{modConfig.visibility}' in workshop.json! Should be: private, public, unlisted, or friends_only");
             return 1;
         }
 
@@ -67,7 +73,7 @@ public static class UploadCommand
 
             if (!ulong.TryParse(modIdStr, out ulong modId))
             {
-                Log.Info("Tried to read mod ID from mod_id.txt, but the text could not be parsed as a mod ID!");
+                Log.Error("Tried to read mod ID from mod_id.txt, but the text could not be parsed as a mod ID!");
                 return 1;
             }
 
@@ -135,18 +141,74 @@ public static class UploadCommand
 
         UGCUpdateHandle_t updateHandle = SteamUGC.StartItemUpdate(_sts2AppId, workshopItem);
 
-        SteamUGC.SetItemTitle(updateHandle, modConfig.title);
-        SteamUGC.SetItemDescription(updateHandle, modConfig.description);
-        SteamUGC.SetItemVisibility(updateHandle, VisibiltyFromString(modConfig.visibility)!.Value);
-        SteamUGC.SetItemTags(updateHandle, modConfig.tags);
-        SteamUGC.SetItemContent(updateHandle, contentDirectoryInfo.FullName);
-        SteamUGC.SetItemPreview(updateHandle, imageFileInfo.FullName);
+        if (modConfig.title != null)
+        {
+            if (!SteamUGC.SetItemTitle(updateHandle, modConfig.title))
+            {
+                Log.Warn("Failed to set title!");
+            }
+        }
 
-        SteamAPICall_t updateItemCall = SteamUGC.SubmitItemUpdate(updateHandle, modConfig.changeNote);
+        if (modConfig.description != null)
+        {
+            if (!SteamUGC.SetItemDescription(updateHandle, modConfig.description))
+            {
+                Log.Warn("Failed to set description!");
+            }
+        }
+
+        if (modConfig.visibility != null)
+        {
+            ERemoteStoragePublishedFileVisibility visibility = VisibiltyFromString(modConfig.visibility)!.Value;
+            
+            if (!SteamUGC.SetItemVisibility(updateHandle, visibility))
+            {
+                Log.Warn("Failed to set visibility!");
+            }
+        }
+
+        if (modConfig.tags != null)
+        {
+            if (!SteamUGC.SetItemTags(updateHandle, modConfig.tags))
+            {
+                Log.Warn("Failed to set tags!");
+            }
+        }
+
+        if (!SteamUGC.SetRequiredGameVersions(updateHandle, modConfig.minBranch ?? "", modConfig.maxBranch ?? ""))
+        {
+            Log.Warn("Failed to set required game versions!");
+        }
+
+        if (!SteamUGC.SetItemContent(updateHandle, contentDirectoryInfo.FullName))
+        {
+            Log.Warn("Failed to upload content!");
+        }
+
+        if (!SteamUGC.SetItemPreview(updateHandle, imageFileInfo.FullName))
+        {
+            Log.Warn("Failed to set preview image!");
+        }
+
+        SteamAPICall_t updateItemCall = SteamUGC.SubmitItemUpdate(updateHandle, modConfig.changeNote ?? "");
         using SteamCallResult<SubmitItemUpdateResult_t> updateItemCallResult = new(updateItemCall);
 
-        CancellationTokenSource uploadProgressCancelToken = new();
-        _ = LogUploadProgress(updateHandle, uploadProgressCancelToken);
+        while (!updateItemCallResult.Task.IsCompleted)
+        {
+            await Task.Delay(500);
+            
+            EItemUpdateStatus status =
+                SteamUGC.GetItemUpdateProgress(updateHandle, out ulong bytesProcessed, out ulong bytesTotal);
+
+            if (bytesTotal > 0)
+            {
+                Log.Info($"Status: {status}, bytes processed: {bytesProcessed}/{bytesTotal} ({(float)bytesProcessed/bytesTotal:P2})");
+            }
+            else
+            {
+                Log.Info($"Status: {status}");
+            }
+        }
         
         SubmitItemUpdateResult_t updateItemResult = await updateItemCallResult.Task;
 
@@ -288,18 +350,7 @@ public static class UploadCommand
         }
     }
 
-    private static async Task LogUploadProgress(UGCUpdateHandle_t updateHandle, CancellationTokenSource cancelToken)
-    {
-        while (!cancelToken.IsCancellationRequested)
-        {
-            EItemUpdateStatus status =
-                SteamUGC.GetItemUpdateProgress(updateHandle, out ulong bytesProcessed, out ulong bytesTotal);
-            Log.Info($"Status: {status}, bytes processed: {bytesProcessed}/{bytesTotal} ({bytesProcessed/bytesTotal:P2})");
-            await Task.Delay(1000, cancelToken.Token);
-        }
-    }
-
-    private static ERemoteStoragePublishedFileVisibility? VisibiltyFromString(string? visibility)
+    private static ERemoteStoragePublishedFileVisibility? VisibiltyFromString(string visibility)
     {
         return visibility switch
         {

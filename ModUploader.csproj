@@ -8,8 +8,8 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="Steamworks.NET" Version="2024.8.0" />
-      <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+      <PackageReference Include="Steamworks.NET" Version="15.0.1" />
+      <PackageReference Include="System.CommandLine" Version="3.0.0-preview.4.26230.115" />
     </ItemGroup>
 
     <ItemGroup>
@@ -22,7 +22,7 @@
         </ContentWithTargetPath>
     </ItemGroup>
     
-    <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
+    <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('win')) or $(RuntimeIdentifier) == ''">
         <ContentWithTargetPath Include="steam\steam_api64.dll">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <TargetPath>steam_api64.dll</TargetPath>
@@ -37,10 +37,16 @@
     </ItemGroup>
     
     <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('osx'))">
-        <ContentWithTargetPath Include="steam\steam_api.bundle\Contents\MacOS\libsteam_api.dylib">
+        <ContentWithTargetPath Include="steam\libsteam_api.dylib">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <TargetPath>libsteam_api.dylib</TargetPath>
         </ContentWithTargetPath>
+    </ItemGroup>
+    
+    <ItemGroup>
+      <Reference Include="Steamworks.NET">
+        <HintPath>steam\Steamworks.NET.dll</HintPath>
+      </Reference>
     </ItemGroup>
 
 </Project>

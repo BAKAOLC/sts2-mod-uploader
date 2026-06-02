@@ -8,4 +8,6 @@ public class ModConfig
   public string? changeNote;
   public List<string>? tags;
   public List<ulong>? dependencies;
+  public string? minBranch;
+  public string? maxBranch;
 }
