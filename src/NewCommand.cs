@@ -10,8 +10,9 @@ public static class NewCommand
     public static Task CreateNewWorkspace(DirectoryInfo? workspaceDirectory)
     {
         DirectoryInfo templateInfo = new("template");
-        CopyDirectoryRecursive(templateInfo, workspaceDirectory ?? new DirectoryInfo("NewModWorkspace"));
-        Log.Info($"Copied template files to {workspaceDirectory}");
+        DirectoryInfo destination = workspaceDirectory ?? new DirectoryInfo("NewModWorkspace");
+        CopyDirectoryRecursive(templateInfo, destination);
+        Log.Info($"Copied template files to {destination.FullName}");
         return Task.CompletedTask;
     }
     
