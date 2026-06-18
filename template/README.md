@@ -4,7 +4,7 @@
 * workshop.json -- The config describing the Steam workspace mod.
 * content       -- Where you should place the mod files to be uploaded to Steam Workshop.
                    This should be at least a JSON file, and probably a PCK & DLL.
-* image.jpg     -- The image shown in the Steam Workshop. Replace with your own!
+* image.png     -- The image shown in the Steam Workshop. Replace with your own!
 * README.md     -- This readme document
 
 ## `workshop.json` Properties
