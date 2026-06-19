@@ -1,6 +1,7 @@
 ﻿{
   "title": "Sts2ModTemplate",
   "description": "Template for new STS2 mods.",
+  "localized": {},
   "visibility": "private",
   "changeNote": "None",
   "tags": [],

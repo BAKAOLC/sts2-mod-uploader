@@ -6,6 +6,8 @@ namespace ModUploader;
 public static class UploadCommand
 {
     private static readonly AppId_t _sts2AppId = new(2868840);
+    private const int SteamMetadataMaxAttempts = 3;
+    private static readonly TimeSpan SteamMetadataRetryDelay = TimeSpan.FromSeconds(2);
     
     public static async Task<int> UploadWorkspace(DirectoryInfo workspaceDirectory, ulong? itemIdArg)
     {
@@ -191,26 +193,7 @@ public static class UploadCommand
         }
 
         SteamAPICall_t updateItemCall = SteamUGC.SubmitItemUpdate(updateHandle, modConfig.changeNote ?? "");
-        using SteamCallResult<SubmitItemUpdateResult_t> updateItemCallResult = new(updateItemCall);
-
-        while (!updateItemCallResult.Task.IsCompleted)
-        {
-            await Task.Delay(500);
-            
-            EItemUpdateStatus status =
-                SteamUGC.GetItemUpdateProgress(updateHandle, out ulong bytesProcessed, out ulong bytesTotal);
-
-            if (bytesTotal > 0)
-            {
-                Log.Info($"Status: {status}, bytes processed: {bytesProcessed}/{bytesTotal} ({(float)bytesProcessed/bytesTotal:P2})");
-            }
-            else
-            {
-                Log.Info($"Status: {status}");
-            }
-        }
-        
-        SubmitItemUpdateResult_t updateItemResult = await updateItemCallResult.Task;
+        SubmitItemUpdateResult_t updateItemResult = await WaitForItemUpdate(updateHandle, updateItemCall);
 
         if (updateItemResult.m_eResult != EResult.k_EResultOK)
         {
@@ -227,6 +210,11 @@ public static class UploadCommand
             writer.WriteLine(workshopItem.m_PublishedFileId);
         }
 
+        if (!await UpdateLocalizedText(workshopItem, modConfig.localized))
+        {
+            return 1;
+        }
+
         if (!await UpdateDependencies(workshopItem, modConfig.dependencies ?? []))
         {
             return 1;
@@ -236,6 +224,125 @@ public static class UploadCommand
         SteamFriends.ActivateGameOverlayToWebPage($"steam://url/CommunityFilePage/{workshopItem.m_PublishedFileId}");
         
         return 0;
+    }
+
+    private static async Task<bool> UpdateLocalizedText(
+        PublishedFileId_t workshopItem,
+        Dictionary<string, LocalizedModText>? localized)
+    {
+        if (localized is not { Count: > 0 })
+        {
+            return true;
+        }
+
+        foreach ((string languageKey, LocalizedModText text) in localized)
+        {
+            string language = languageKey.Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(language))
+            {
+                Log.Error("Localized title/description entry has an empty language key.");
+                return false;
+            }
+
+            if (text.title == null && text.description == null)
+            {
+                Log.Error($"Localized entry for '{language}' must set title or description.");
+                return false;
+            }
+
+            if (!await UpdateLocalizedTextForLanguage(workshopItem, language, text))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static async Task<bool> UpdateLocalizedTextForLanguage(
+        PublishedFileId_t workshopItem,
+        string language,
+        LocalizedModText text)
+    {
+        for (int attempt = 1; attempt <= SteamMetadataMaxAttempts; attempt++)
+        {
+            Log.Info($"Updating localized metadata for '{language}' (attempt {attempt}/{SteamMetadataMaxAttempts})...");
+
+            UGCUpdateHandle_t updateHandle = SteamUGC.StartItemUpdate(_sts2AppId, workshopItem);
+            if (!SteamUGC.SetItemUpdateLanguage(updateHandle, language))
+            {
+                Log.Error($"Failed to set update language '{language}'.");
+                return false;
+            }
+
+            if (text.title != null && !SteamUGC.SetItemTitle(updateHandle, text.title))
+            {
+                Log.Error($"Failed to set localized title for '{language}'.");
+                return false;
+            }
+
+            if (text.description != null && !SteamUGC.SetItemDescription(updateHandle, text.description))
+            {
+                Log.Error($"Failed to set localized description for '{language}'.");
+                return false;
+            }
+
+            try
+            {
+                SteamAPICall_t updateItemCall = SteamUGC.SubmitItemUpdate(updateHandle, "");
+                SubmitItemUpdateResult_t updateItemResult = await WaitForItemUpdate(updateHandle, updateItemCall);
+
+                if (updateItemResult.m_eResult == EResult.k_EResultOK)
+                {
+                    return true;
+                }
+
+                if (!ShouldRetrySteamResult(updateItemResult.m_eResult) || attempt == SteamMetadataMaxAttempts)
+                {
+                    Log.Error(
+                        $"Error occurred while updating localized metadata for '{language}'! Result: {updateItemResult.m_eResult}");
+                    return false;
+                }
+
+                Log.Warn(
+                    $"Localized metadata update for '{language}' failed with {updateItemResult.m_eResult}; retrying...");
+            }
+            catch (IOException e) when (attempt < SteamMetadataMaxAttempts)
+            {
+                Log.Warn($"Localized metadata update for '{language}' hit an IO failure; retrying. {e.Message}");
+            }
+
+            await Task.Delay(SteamMetadataRetryDelay);
+        }
+
+        return false;
+    }
+
+    private static async Task<SubmitItemUpdateResult_t> WaitForItemUpdate(
+        UGCUpdateHandle_t updateHandle,
+        SteamAPICall_t updateItemCall)
+    {
+        using SteamCallResult<SubmitItemUpdateResult_t> updateItemCallResult = new(updateItemCall);
+
+        while (!updateItemCallResult.Task.IsCompleted)
+        {
+            await Task.Delay(500);
+
+            EItemUpdateStatus status =
+                SteamUGC.GetItemUpdateProgress(updateHandle, out ulong bytesProcessed, out ulong bytesTotal);
+
+            if (bytesTotal > 0)
+            {
+                Log.Info(
+                    $"Status: {status}, bytes processed: {bytesProcessed}/{bytesTotal} ({(float)bytesProcessed / bytesTotal:P2})");
+            }
+            else
+            {
+                Log.Info($"Status: {status}");
+            }
+        }
+
+        return await updateItemCallResult.Task;
     }
 
     private static async Task<bool> UpdateDependencies(PublishedFileId_t workshopItem, List<ulong> newDependencies)
@@ -274,34 +381,84 @@ public static class UploadCommand
 
     private static async Task<bool> AddDependency(PublishedFileId_t workshopItem, ulong dependency)
     {
-        SteamAPICall_t call = SteamUGC.AddDependency(workshopItem, new PublishedFileId_t(dependency));
-        using SteamCallResult<AddUGCDependencyResult_t> callResult = new(call);
-        AddUGCDependencyResult_t result = await callResult.Task;
-
-        if (result.m_eResult != EResult.k_EResultOK)
+        for (int attempt = 1; attempt <= SteamMetadataMaxAttempts; attempt++)
         {
-            Log.Error($"Failed to add dependency on {dependency}! Result: {result.m_eResult}");
-            return false;
+            try
+            {
+                SteamAPICall_t call = SteamUGC.AddDependency(workshopItem, new PublishedFileId_t(dependency));
+                using SteamCallResult<AddUGCDependencyResult_t> callResult = new(call);
+                AddUGCDependencyResult_t result = await callResult.Task;
+
+                if (result.m_eResult == EResult.k_EResultOK)
+                {
+                    Log.Info($"Added dependency on {dependency}");
+                    return true;
+                }
+
+                if (!ShouldRetrySteamResult(result.m_eResult) || attempt == SteamMetadataMaxAttempts)
+                {
+                    Log.Error($"Failed to add dependency on {dependency}! Result: {result.m_eResult}");
+                    return false;
+                }
+
+                Log.Warn($"Failed to add dependency on {dependency} with {result.m_eResult}; retrying...");
+            }
+            catch (IOException e) when (attempt < SteamMetadataMaxAttempts)
+            {
+                Log.Warn($"Adding dependency on {dependency} hit an IO failure; retrying. {e.Message}");
+            }
+
+            await Task.Delay(SteamMetadataRetryDelay);
         }
 
-        Log.Info($"Added dependency on {dependency}");
-        return true;
+        return false;
     }
 
     private static async Task<bool> RemoveDependency(PublishedFileId_t workshopItem, ulong dependency)
     {
-        SteamAPICall_t call = SteamUGC.RemoveDependency(workshopItem, new PublishedFileId_t(dependency));
-        using SteamCallResult<RemoveUGCDependencyResult_t> callResult = new(call);
-        RemoveUGCDependencyResult_t result = await callResult.Task;
-
-        if (result.m_eResult != EResult.k_EResultOK)
+        for (int attempt = 1; attempt <= SteamMetadataMaxAttempts; attempt++)
         {
-            Log.Error($"Failed to remove dependency on {dependency}! Result: {result.m_eResult}");
-            return false;
+            try
+            {
+                SteamAPICall_t call = SteamUGC.RemoveDependency(workshopItem, new PublishedFileId_t(dependency));
+                using SteamCallResult<RemoveUGCDependencyResult_t> callResult = new(call);
+                RemoveUGCDependencyResult_t result = await callResult.Task;
+
+                if (result.m_eResult == EResult.k_EResultOK)
+                {
+                    Log.Info($"Removed dependency on {dependency}");
+                    return true;
+                }
+
+                if (!ShouldRetrySteamResult(result.m_eResult) || attempt == SteamMetadataMaxAttempts)
+                {
+                    Log.Error($"Failed to remove dependency on {dependency}! Result: {result.m_eResult}");
+                    return false;
+                }
+
+                Log.Warn($"Failed to remove dependency on {dependency} with {result.m_eResult}; retrying...");
+            }
+            catch (IOException e) when (attempt < SteamMetadataMaxAttempts)
+            {
+                Log.Warn($"Removing dependency on {dependency} hit an IO failure; retrying. {e.Message}");
+            }
+
+            await Task.Delay(SteamMetadataRetryDelay);
         }
 
-        Log.Info($"Removed dependency on {dependency}");
-        return true;
+        return false;
+    }
+
+    private static bool ShouldRetrySteamResult(EResult result)
+    {
+        return result is EResult.k_EResultBusy
+            or EResult.k_EResultTimeout
+            or EResult.k_EResultServiceUnavailable
+            or EResult.k_EResultLimitExceeded
+            or EResult.k_EResultIOFailure
+            or EResult.k_EResultRemoteCallFailed
+            or EResult.k_EResultRateLimitExceeded
+            or EResult.k_EResultTryLater;
     }
 
     private static async Task<List<ulong>> GetAppDependencies(PublishedFileId_t workshopItem)

@@ -17,6 +17,7 @@ Most properties can be substituted with `null` or removed from the JSON if you w
 {
   "title": "",                -- The title of your mod.
   "description": "",          -- The description.
+  "localized": {},            -- Optional localized title/description overrides keyed by Steam language.
   "visibility": "private",    -- The visibility status of the mod. 
                                   Options include: "private", "public", "unlisted", and "friends_only".
   "changeNote": "",           -- A note for describing the newest changes you've made to your users.
@@ -34,7 +35,26 @@ Most properties can be substituted with `null` or removed from the JSON if you w
 }
 ```
 
+## Localized title and description
 
+`localized` can set translated titles and descriptions for Steam languages. Steam language keys use Steam's API names, such as `english`, `schinese`, `tchinese`, or `japanese`.
 
+```
+{
+  "title": "Example Mod",
+  "description": "Adds an example feature.",
+  "localized": {
+    "schinese": {
+      "title": "示例模组",
+      "description": "添加一个示例功能。"
+    },
+    "japanese": {
+      "title": "Example Mod",
+      "description": "サンプル機能を追加します。"
+    }
+  }
+}
+```
 
+Each localized entry must include at least `title` or `description`.
 
