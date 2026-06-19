@@ -18,8 +18,7 @@ Most properties can be substituted with `null` or removed from the JSON if you w
   "title": "",                -- The title of your mod.
   "description": "",          -- The description.
   "visibility": "private",    -- The visibility status of the mod. 
-                                  Options include: "private", "public", "unlisted", "friends_only",
-                                  "friends", and "friendsonly".
+                                  Options include: "private", "public", "unlisted", and "friends_only".
   "changeNote": "",           -- A note for describing the newest changes you've made to your users.
   "tags": [],                 -- A list of tags to search for your mod by. 
                                  Note: the tag "tool" is reserved for mods that function as tools.
